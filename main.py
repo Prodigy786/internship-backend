@@ -1,8 +1,11 @@
 ﻿from fastapi import FastAPI
-from fastapi.responses import PlainTextResponse
 
 app = FastAPI()
 
-@app.get("/", response_class=PlainTextResponse)
+@app.get("/")
 def read_root():
-    return "Hello, server"
+    return {"name": "Task API", "version": "1.0", "endpoints": ["/tasks"]}
+
+@app.get("/health")
+def read_health():
+    return {"status": "ok"}
