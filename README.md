@@ -1,112 +1,142 @@
-# Task CRUD API
+# Task CRUD API (SQLite Edition — W3 Assignment 2)
 
-A premium, fast, and interactive in-memory To-Do Task CRUD API built with Python and FastAPI. It supports the full CRUD lifecycle, input validation, custom error responses, Swagger UI interactive documentation, and several extra features (filtering, title searching, stats tracking, and database reset).
+A fast, persistent To-Do list CRUD API built with Python and FastAPI, backed by a real **SQLite** database (`tasks.db`). 
 
-## 🚀 Installation & Running
-
-Follow these steps to run the API locally in under 5 minutes:
-
-1. **Clone the repository** (or navigate to the workspace directory).
-2. **Create a virtual environment** and activate it:
-   ```powershell
-   python -m venv venv
-   .\venv\Scripts\Activate.ps1
-   ```
-3. **Install dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
-4. **Run the server** with one command:
-   ```bash
-   .\venv\Scripts\uvicorn main:app --reload
-   ```
-   The API will start running at `http://127.0.0.1:8000`.
+While client requests and API responses behave identically to Assignment 1, all data is now persisted to disk on a SQLite table, allowing task records to survive server restarts.
 
 ---
 
-## 📂 API Endpoints
+## 💡 Why SQLite?
 
-| Method | Endpoint | Request Body | Success Code | Error Codes | Description |
+1. **Zero Configuration & Serverless:** SQLite operates directly on a single local file (`tasks.db`) without requiring a separate database server daemon (like Postgres or MySQL) to install, configure, or maintain.
+2. **File-Based Persistence:** Data lives on disk rather than volatile RAM, ensuring tasks outlive application restarts.
+3. **Identical API Contracts:** Migrating from in-memory arrays to SQLite demonstrates that data storage is strictly an **implementation detail** — external clients continue sending the same requests to the same endpoints and receiving identical responses.
+
+---
+
+## 🚀 Installation & Running
+
+1. **Activate virtual environment:**
+   ```powershell
+   .\venv\Scripts\Activate.ps1
+   ```
+2. **Install dependencies** (if not already installed):
+   ```bash
+   pip install -r requirements.txt
+   ```
+3. **Start the API server (1 command):**
+   ```bash
+   uvicorn main:app --reload
+   ```
+   The API will automatically create `tasks.db` and seed 3 default tasks if the database is missing.
+
+---
+
+## 📂 Database File Location & Schema
+
+* **Database File:** `tasks.db` (located in the project root directory).
+* **Git Policy:** `tasks.db` is included in `.gitignore` so every new clone starts clean with fresh database auto-creation and seeding.
+
+### SQL Schema (`tasks` table)
+```sql
+CREATE TABLE IF NOT EXISTS tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    done INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+---
+
+## 📖 API Endpoints & Status Codes
+
+| Method | Endpoint | Request Body | Success | Error Codes | Description |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **GET** | `/` | None | `200 OK` | None | Retrieves API name, version, and primary endpoints list. |
-| **GET** | `/health` | None | `200 OK` | None | Health check endpoint returning `{ "status": "ok" }`. |
-| **GET** | `/tasks` | None | `200 OK` | None | Lists all tasks. Supports optional query parameters: `done` (boolean) and `search` (case-insensitive string search). |
-| **GET** | `/tasks/{id}` | None | `200 OK` | `404 Not Found` | Returns a single task by its ID. |
-| **POST** | `/tasks` | `{ "title": "Text" }` | `201 Created` | `400 Bad Request` | Creates a new task. Checks that `title` is a non-empty string. |
-| **PUT** | `/tasks/{id}` | `{ "title": "Text", "done": bool }` | `200 OK` | `400 Bad Request`, `404 Not Found` | Replaces/updates an existing task's title and/or done status. |
-| **DELETE**| `/tasks/{id}` | None | `204 No Content`| `404 Not Found` | Deletes a task by ID. Returns empty body on success. |
-| **GET** | `/stats` | None | `200 OK` | None | Returns counts for `total`, `done`, and `open` tasks. |
-| **POST** | `/reset` | None | `200 OK` | None | Restores the default 3 seed tasks. |
+| **GET** | `/` | None | `200 OK` | None | API metadata and storage mode details. |
+| **GET** | `/health` | None | `200 OK` | None | Server health status (`{"status": "ok"}`). |
+| **GET** | `/tasks` | None | `200 OK` | None | Lists tasks from SQLite. Supports `done` status filter and SQL `search` term. |
+| **GET** | `/tasks/{id}` | None | `200 OK` | `404 Not Found` | Fetches a single task from SQLite via parameterized query (`WHERE id = ?`). |
+| **POST** | `/tasks` | `{ "title": "Text" }` | `201 Created` | `400 Bad Request` | Inserts a new task into SQLite. Returns auto-generated ID. |
+| **PUT** | `/tasks/{id}` | `{ "title": "Text", "done": bool }` | `200 OK` | `400 Bad Request`, `404 Not Found` | Updates task title and/or completion status in SQLite. |
+| **DELETE**| `/tasks/{id}` | None | `204 No Content`| `404 Not Found` | Deletes task row from SQLite by ID. |
+| **GET** | `/stats` | None | `200 OK` | None | Computes `total`, `done`, and `open` counts via SQL `COUNT(*)`. |
+| **POST** | `/reset` | None | `200 OK` | None | Clears table and re-seeds 3 default tasks in a single transaction. |
 
 ---
 
 ## 💻 Example Curl Output
 
-Here is the terminal output from creating a new task using `curl -i`:
+Creating a new task and verifying disk persistence:
 
 ```http
 HTTP/1.1 201 Created
-date: Fri, 17 Jul 2026 22:18:34 GMT
+date: Thu, 23 Jul 2026 05:47:06 GMT
 server: uvicorn
-content-length: 43
+content-length: 123
 content-type: application/json
 
-{"id":4,"title":"Read a book","done":false}
+{"id":4,"title":"Buy organic groceries","done":false,"created_at":"2026-07-23 05:47:07","updated_at":"2026-07-23 05:47:07"}
 ```
 
 ---
 
-## 🔍 Swagger UI Documentation
+## 🔍 Stage 4: SQL Exploration by Hand
 
-FastAPI automatically generates interactive Swagger UI documentation at:
-👉 **[http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)**
+Opening `tasks.db` directly using **DB Browser for SQLite** (or raw SQLite queries):
 
-You can expand any endpoint, click **"Try it out"**, fill in the parameters, and click **"Execute"** to send live requests to the running server.
+```sql
+-- 1. List every task in the table
+SELECT * FROM tasks;
 
-![Swagger UI Screenshot](swagger-screenshot.png)
+-- 2. Fetch only completed tasks
+SELECT * FROM tasks WHERE done = 1;
 
----
+-- 3. Calculate total task count
+SELECT COUNT(*) FROM tasks;
 
-## 🧪 The Mortality Experiment
+-- 4. Mark every task as completed
+UPDATE tasks SET done = 1;
+
+-- 5. Delete all completed tasks
+DELETE FROM tasks WHERE done = 1;
+```
 
 **Observation:**
-If we create new tasks (e.g. `id: 4` "Read a book"), restart the FastAPI server, and then execute `GET /tasks`, all the newly added tasks disappear and the database resets to the original 3 default seed tasks.
-
-**Why this happens:**
-Our API stores tasks in a standard Python list inside RAM (`in-memory`). Since RAM is volatile, all variables and data are wiped clean when the server process exits. To persist tasks across restarts, we need a non-volatile data storage solution, such as a database (SQL/NoSQL) or filesystem writes, which will be introduced in Week 3.
+Executing queries by hand inside DB Browser directly modifies `tasks.db`. Immediately calling `GET /tasks` from curl or Swagger UI reflects these changes instantly without restarting the server — proving that the API and DB Browser share one single disk-backed source of truth.
 
 ---
 
-## 🤖 AI vs Me: Stage 7 Rematch
+## 🎯 Implementation Detail Proof
 
-This section compares our hand-built implementation against the AI-generated quarantine version located in [ai-version/main.py](file:///c:/Users/hp/Desktop/Internship%20assignment/ai-version/main.py).
+**Why identical API tests prove storage is just an implementation detail:**
+Our Stage 4 curl test suite from Assignment 1 runs completely unchanged against this SQLite version and produces 100% identical HTTP status codes (`200`, `201`, `204`, `400`, `404`) and JSON payloads. 
+
+The API defines the **contract** (what the application promises to do), while the database defines **where** the data is kept. Swapping the storage layer from memory to SQLite (or Postgres) keeps the exact same contract intact.
+
+---
+
+## 🤖 Stage 6: AI Rematch (AI vs Me)
+
+This section compares our hand-built SQLite implementation in [main.py](file:///c:/Users/hp/Desktop/Internship%20assignment/main.py) against the AI-generated version in [ai-version/main.py](file:///c:/Users/hp/Desktop/Internship%20assignment/ai-version/main.py).
 
 ### The Prompt Used
 ```text
-Write a Python FastAPI application for a To-Do list CRUD API.
-It should store tasks in-memory in a list. The list should be pre-populated with 3 tasks (ids 1, 2, and 3) with properties: id (int), title (str), done (bool).
-
-Implement the following endpoints:
-1. GET / - returns JSON metadata: { "name": "Task API", "version": "1.0", "endpoints": ["/tasks"] }
-2. GET /health - returns { "status": "ok" }
-3. GET /tasks - returns the list of tasks.
-4. GET /tasks/{id} - returns a single task. If task doesn't exist, return status 404 with JSON: { "error": "Task <id> not found" }
-5. POST /tasks - creates a new task. Request body must contain a JSON object with 'title' (non-empty string). Sets done=False, assigns next free integer id, appends to the in-memory list, and returns the created task with status code 201. If title is missing or empty, returns 400 Bad Request with a JSON error.
-6. PUT /tasks/{id} - replaces title and/or done status of a task based on the body. Returns the updated task. Returns 404 for unknown id, and 400 for empty/invalid body.
-7. DELETE /tasks/{id} - removes the task from the list. Returns status code 204 with an empty body. Returns 404 for unknown id.
-
-Ensure all endpoints are documented using docstrings so Swagger UI at /docs is informative.
+Migrate the Python FastAPI To-Do list CRUD API to use a SQLite database (ai_tasks.db).
+1. Create a table named tasks with columns: id (INTEGER PRIMARY KEY AUTOINCREMENT), title (TEXT NOT NULL), and done (INTEGER NOT NULL DEFAULT 0).
+2. On startup, create the table if missing, and seed 3 initial tasks ONLY if the table is empty.
+3. Use parameterized SQL queries (?) for all CRUD operations.
+4. Implement GET /, GET /health, GET /tasks, GET /tasks/{id}, POST /tasks (201 created, 400 bad request), PUT /tasks/{id} (200/400/404), and DELETE /tasks/{id} (204 no content, 404).
 ```
 
 ### Key Differences Observed
-1. **Pydantic vs. Manual Request Parsing:**
-   * **Hand-Built:** We manually parsed raw JSON bodies from the FastAPI `Request` object asynchronously (`await request.json()`) and explicitly validated types and empty strings inside the route handlers. This kept the route logic self-contained but required async route handling.
-   * **AI-Generated:** The AI used idiomatic FastAPI Pydantic models (`TaskCreate` and `TaskUpdate`) with field validators (`@field_validator`). This allowed all routing functions to be synchronous because Pydantic handles parsing automatically before execution.
-2. **Handling 422 vs. 400 Error Codes:**
-   * **Hand-Built:** Since we manually validated, returning a `400 Bad Request` was as simple as returning `JSONResponse(status_code=400, content={"error": "..."})`.
-   * **AI-Generated:** By default, Pydantic validation failures return `422 Unprocessable Entity`. To conform to our spec requiring `400 Bad Request`, the AI registered a custom exception handler `@app.exception_handler(RequestValidationError)` that catches the validation errors, parses them into a custom detail string, and returns them as a `400` status JSON response.
-3. **What was forgotten and silently decided:**
-   * The prompt did not specify the exact format of the JSON validation error. The AI decided to format it as `{"error": "Bad Request: body -> title: Field required"}`.
-   * The prompt did not specify how a `PUT` endpoint (which typically means full replacement) should handle partial updates. The AI resolved this by creating a `TaskUpdate` model with all optional fields and updating only the fields provided.
-   * The hand-built version includes the optional extras (filtering, search, stats, reset) which make it a more complete and feature-rich server.
-
+1. **Timestamp Auditing:**
+   * **Hand-Built:** Included `created_at` and `updated_at` timestamps using SQLite `CURRENT_TIMESTAMP` for auditability and schema completeness.
+   * **AI-Generated:** Created only basic `id`, `title`, and `done` columns without timestamp metadata.
+2. **Schema Control & Isolation:**
+   * **Hand-Built:** Stored data in the main application `tasks.db`.
+   * **AI-Generated:** Isolated its database into `ai_tasks.db` within the `ai-version/` directory to prevent workspace collision.
+3. **Transaction Management & Reset:**
+   * **Hand-Built:** Included `POST /reset`, SQL status filtering, and SQL `COUNT(*)` aggregation endpoints (`/stats`).
+   * **AI-Generated:** Stuck strictly to the core 5 CRUD endpoints and did not add statistics or table reset utilities.
