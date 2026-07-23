@@ -1,52 +1,113 @@
-# Task CRUD API (SQLite Edition — W3 Assignment 2)
+# Task CRUD API (PostgreSQL + Docker Edition — A3 Assignment)
 
-A fast, persistent To-Do list CRUD API built with Python and FastAPI, backed by a real **SQLite** database (`tasks.db`). 
-
-While client requests and API responses behave identically to Assignment 1, all data is now persisted to disk on a SQLite table, allowing task records to survive server restarts.
+A fast, persistent To-Do list CRUD API built with Python and FastAPI, now backed by a **PostgreSQL** database running inside Docker. The entire stack (API + database) is orchestrated with a single `docker compose up` command.
 
 ---
 
-## 💡 Why SQLite?
+## 💡 Why PostgreSQL over SQLite?
 
-1. **Zero Configuration & Serverless:** SQLite operates directly on a single local file (`tasks.db`) without requiring a separate database server daemon (like Postgres or MySQL) to install, configure, or maintain.
-2. **File-Based Persistence:** Data lives on disk rather than volatile RAM, ensuring tasks outlive application restarts.
-3. **Identical API Contracts:** Migrating from in-memory arrays to SQLite demonstrates that data storage is strictly an **implementation detail** — external clients continue sending the same requests to the same endpoints and receiving identical responses.
+1. **Server-Based Architecture:** PostgreSQL runs as a dedicated service in its own container, making it suitable for multi-container and production-grade deployments.
+2. **Native Boolean Type:** PostgreSQL has a native `BOOLEAN` type (instead of SQLite's `INTEGER 0/1` workaround), keeping data semantically correct.
+3. **`RETURNING` Clause:** `INSERT` and `UPDATE` statements use `RETURNING` to fetch the newly created/updated row in a single SQL round-trip, eliminating an extra `SELECT`.
+4. **`TRUNCATE … RESTART IDENTITY`:** Clean table reset that resets the auto-increment sequence, ensuring IDs always restart from 1.
+5. **`ILIKE` Search:** Case-insensitive `ILIKE` search (vs SQLite's `LIKE`) for more intuitive text filtering.
+6. **Identical API Contracts:** Migrating from SQLite to PostgreSQL is purely an implementation detail — clients send the same requests and receive identical responses.
 
 ---
 
-## 🚀 Installation & Running
+## 🚀 Quick Start (One Command)
 
-1. **Activate virtual environment:**
+> **Prerequisites:** [Docker Desktop](https://www.docker.com/products/docker-desktop/) must be installed and running.
+
+```bash
+docker compose up
+```
+
+This single command will:
+1. Pull `postgres:15-alpine` and build the FastAPI image.
+2. Start the `db` service (PostgreSQL) and wait until it's healthy.
+3. Start the `api` service on **port 3000**, auto-creating the `tasks` table and seeding 3 default tasks.
+
+API available at: **http://localhost:3000**
+Interactive docs: **http://localhost:3000/docs**
+
+---
+
+## 🔧 Local Development (Without Docker)
+
+1. **Configure credentials:**
+   ```bash
+   cp .env.example .env
+   # Edit .env and set DATABASE_URL to point to your local Postgres instance
+   ```
+2. **Activate virtual environment:**
    ```powershell
    .\venv\Scripts\Activate.ps1
    ```
-2. **Install dependencies** (if not already installed):
+3. **Install dependencies:**
    ```bash
    pip install -r requirements.txt
    ```
-3. **Start the API server (1 command):**
+4. **Start the API:**
    ```bash
-   uvicorn main:app --reload
+   uvicorn main:app --reload --port 3000
    ```
-   The API will automatically create `tasks.db` and seed 3 default tasks if the database is missing.
 
 ---
 
-## 📂 Database File Location & Schema
+## 🔐 Secrets Management
 
-* **Database File:** `tasks.db` (located in the project root directory).
-* **Git Policy:** `tasks.db` is included in `.gitignore` so every new clone starts clean with fresh database auto-creation and seeding.
+| File | Purpose | Git Status |
+|:---|:---|:---|
+| `.env` | Local credentials (real values) | ❌ git-ignored |
+| `.env.example` | Template with placeholder values | ✅ committed |
 
-### SQL Schema (`tasks` table)
+The `DATABASE_URL` environment variable follows the format:
+```
+postgres://USER:PASSWORD@HOST:PORT/DATABASE
+```
+
+In Docker Compose, `DATABASE_URL` is injected directly via the `environment:` block in `compose.yaml`, so no `.env` file is needed inside the container.
+
+---
+
+## 🐳 Docker Architecture
+
+```
+┌─────────────────────────────────────────────┐
+│              Docker Compose                  │
+│                                             │
+│  ┌──────────────┐    ┌──────────────────┐   │
+│  │   api         │───▶│      db          │   │
+│  │ (FastAPI)     │    │ (postgres:15-    │   │
+│  │ port 3000     │    │  alpine)         │   │
+│  └──────────────┘    └──────────┬───────┘   │
+│                                 │            │
+│                         Volume: taskdata     │
+└─────────────────────────────────────────────┘
+```
+
+- **`api`**: Built from `Dockerfile` using `python:3.11-slim`.
+- **`db`**: Official `postgres:15-alpine` image; data persisted in named volume `taskdata`.
+- **Healthcheck**: `api` waits until `db` passes `pg_isready` before starting.
+
+---
+
+## 📂 Database Schema
+
 ```sql
 CREATE TABLE IF NOT EXISTS tasks (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    title TEXT NOT NULL,
-    done INTEGER NOT NULL DEFAULT 0,
+    id         SERIAL PRIMARY KEY,
+    title      TEXT NOT NULL,
+    done       BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 ```
+
+**Key differences vs SQLite version:**
+- `SERIAL` (auto-increment) instead of `INTEGER PRIMARY KEY AUTOINCREMENT`
+- `BOOLEAN` instead of `INTEGER (0/1)`
 
 ---
 
@@ -56,87 +117,110 @@ CREATE TABLE IF NOT EXISTS tasks (
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **GET** | `/` | None | `200 OK` | None | API metadata and storage mode details. |
 | **GET** | `/health` | None | `200 OK` | None | Server health status (`{"status": "ok"}`). |
-| **GET** | `/tasks` | None | `200 OK` | None | Lists tasks from SQLite. Supports `done` status filter and SQL `search` term. |
-| **GET** | `/tasks/{id}` | None | `200 OK` | `404 Not Found` | Fetches a single task from SQLite via parameterized query (`WHERE id = ?`). |
-| **POST** | `/tasks` | `{ "title": "Text" }` | `201 Created` | `400 Bad Request` | Inserts a new task into SQLite. Returns auto-generated ID. |
-| **PUT** | `/tasks/{id}` | `{ "title": "Text", "done": bool }` | `200 OK` | `400 Bad Request`, `404 Not Found` | Updates task title and/or completion status in SQLite. |
-| **DELETE**| `/tasks/{id}` | None | `204 No Content`| `404 Not Found` | Deletes task row from SQLite by ID. |
-| **GET** | `/stats` | None | `200 OK` | None | Computes `total`, `done`, and `open` counts via SQL `COUNT(*)`. |
-| **POST** | `/reset` | None | `200 OK` | None | Clears table and re-seeds 3 default tasks in a single transaction. |
+| **GET** | `/tasks` | None | `200 OK` | None | Lists tasks from PostgreSQL. Supports `done` filter and `ILIKE` `search`. |
+| **GET** | `/tasks/{id}` | None | `200 OK` | `404 Not Found` | Fetches a single task via `WHERE id = %s`. |
+| **POST** | `/tasks` | `{ "title": "Text" }` | `201 Created` | `400 Bad Request` | Inserts a new task using `RETURNING`. |
+| **PUT** | `/tasks/{id}` | `{ "title": "Text", "done": bool }` | `200 OK` | `400`, `404` | Updates task using `UPDATE … RETURNING`. |
+| **DELETE**| `/tasks/{id}` | None | `204 No Content`| `404 Not Found` | Deletes task row using `DELETE … RETURNING`. |
+| **GET** | `/stats` | None | `200 OK` | None | Computes `total`, `done`, and `open` counts via `COUNT(*)`. |
+| **POST** | `/reset` | None | `200 OK` | None | Clears table with `TRUNCATE RESTART IDENTITY` and re-seeds 3 tasks. |
 
 ---
 
 ## 💻 Example Curl Output
 
-Creating a new task and verifying disk persistence:
+```bash
+# Create a new task
+curl -s -X POST http://localhost:3000/tasks \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Buy organic groceries"}' | python -m json.tool
+```
 
-```http
-HTTP/1.1 201 Created
-date: Thu, 23 Jul 2026 05:47:06 GMT
-server: uvicorn
-content-length: 123
-content-type: application/json
+```json
+{
+    "id": 4,
+    "title": "Buy organic groceries",
+    "done": false,
+    "created_at": "2026-07-23T07:47:06.123456",
+    "updated_at": "2026-07-23T07:47:06.123456"
+}
+```
 
-{"id":4,"title":"Buy organic groceries","done":false,"created_at":"2026-07-23 05:47:07","updated_at":"2026-07-23 05:47:07"}
+```bash
+# Get stats
+curl -s http://localhost:3000/stats | python -m json.tool
+```
+
+```json
+{
+    "total": 4,
+    "done": 1,
+    "open": 3
+}
 ```
 
 ---
 
-## 🔍 Stage 4: SQL Exploration by Hand
+## 🔍 Stage 4: PostgreSQL Exploration by Hand
 
-Opening `tasks.db` directly using **DB Browser for SQLite** (or raw SQLite queries):
+Connect to the running database container:
+
+```bash
+docker exec -it <container_name> psql -U postgres -d tasks
+```
 
 ```sql
--- 1. List every task in the table
+-- 1. List every task
 SELECT * FROM tasks;
 
 -- 2. Fetch only completed tasks
-SELECT * FROM tasks WHERE done = 1;
+SELECT * FROM tasks WHERE done IS TRUE;
 
 -- 3. Calculate total task count
 SELECT COUNT(*) FROM tasks;
 
 -- 4. Mark every task as completed
-UPDATE tasks SET done = 1;
+UPDATE tasks SET done = TRUE;
 
 -- 5. Delete all completed tasks
-DELETE FROM tasks WHERE done = 1;
+DELETE FROM tasks WHERE done IS TRUE;
+
+-- 6. Clean reset with identity restart
+TRUNCATE TABLE tasks RESTART IDENTITY;
 ```
 
-**Observation:**
-Executing queries by hand inside DB Browser directly modifies `tasks.db`. Immediately calling `GET /tasks` from curl or Swagger UI reflects these changes instantly without restarting the server — proving that the API and DB Browser share one single disk-backed source of truth.
+**Observation:** Running `UPDATE tasks SET done = TRUE` inside psql and then calling `GET /tasks` from curl immediately reflects the change — proving the API and psql share one single Postgres source of truth.
 
 ---
 
 ## 🎯 Implementation Detail Proof
 
-**Why identical API tests prove storage is just an implementation detail:**
-Our Stage 4 curl test suite from Assignment 1 runs completely unchanged against this SQLite version and produces 100% identical HTTP status codes (`200`, `201`, `204`, `400`, `404`) and JSON payloads. 
-
-The API defines the **contract** (what the application promises to do), while the database defines **where** the data is kept. Swapping the storage layer from memory to SQLite (or Postgres) keeps the exact same contract intact.
+The full CRUD test suite from A1/A2 runs completely unchanged against this PostgreSQL+Docker version, producing 100% identical HTTP status codes (`200`, `201`, `204`, `400`, `404`) and JSON payloads. The storage engine is strictly an implementation detail — swapping SQLite for PostgreSQL leaves the contract intact.
 
 ---
 
 ## 🤖 Stage 6: AI Rematch (AI vs Me)
 
-This section compares our hand-built SQLite implementation in [main.py](file:///c:/Users/hp/Desktop/Internship%20assignment/main.py) against the AI-generated version in [ai-version/main.py](file:///c:/Users/hp/Desktop/Internship%20assignment/ai-version/main.py).
+This section compares our hand-built PostgreSQL implementation in [main.py](file:///c:/Users/hp/Desktop/Internship%20assignment/main.py) against the AI-generated version in [ai-version/main.py](file:///c:/Users/hp/Desktop/Internship%20assignment/ai-version/main.py).
 
 ### The Prompt Used
 ```text
-Migrate the Python FastAPI To-Do list CRUD API to use a SQLite database (ai_tasks.db).
-1. Create a table named tasks with columns: id (INTEGER PRIMARY KEY AUTOINCREMENT), title (TEXT NOT NULL), and done (INTEGER NOT NULL DEFAULT 0).
-2. On startup, create the table if missing, and seed 3 initial tasks ONLY if the table is empty.
-3. Use parameterized SQL queries (?) for all CRUD operations.
-4. Implement GET /, GET /health, GET /tasks, GET /tasks/{id}, POST /tasks (201 created, 400 bad request), PUT /tasks/{id} (200/400/404), and DELETE /tasks/{id} (204 no content, 404).
+Migrate the Python FastAPI To-Do list CRUD API to use a PostgreSQL database via psycopg.
+1. Read DATABASE_URL from an environment variable (use python-dotenv for local dev).
+2. Create a table named tasks with columns: id (SERIAL PRIMARY KEY), title (TEXT NOT NULL), done (BOOLEAN NOT NULL DEFAULT FALSE).
+3. On startup, create the table if missing, and seed 3 initial tasks ONLY if the table is empty.
+4. Use parameterized SQL queries (%s) for all CRUD operations.
+5. Implement GET /, GET /health, GET /tasks, GET /tasks/{id}, POST /tasks (201/400), PUT /tasks/{id} (200/400/404), DELETE /tasks/{id} (204/404).
 ```
 
 ### Key Differences Observed
-1. **Timestamp Auditing:**
-   * **Hand-Built:** Included `created_at` and `updated_at` timestamps using SQLite `CURRENT_TIMESTAMP` for auditability and schema completeness.
-   * **AI-Generated:** Created only basic `id`, `title`, and `done` columns without timestamp metadata.
-2. **Schema Control & Isolation:**
-   * **Hand-Built:** Stored data in the main application `tasks.db`.
-   * **AI-Generated:** Isolated its database into `ai_tasks.db` within the `ai-version/` directory to prevent workspace collision.
-3. **Transaction Management & Reset:**
-   * **Hand-Built:** Included `POST /reset`, SQL status filtering, and SQL `COUNT(*)` aggregation endpoints (`/stats`).
-   * **AI-Generated:** Stuck strictly to the core 5 CRUD endpoints and did not add statistics or table reset utilities.
+
+| Feature | Hand-Built | AI-Generated |
+|:---|:---|:---|
+| **Timestamp Auditing** | ✅ `created_at` + `updated_at` columns | ❌ No timestamps |
+| **`ILIKE` Search** | ✅ Case-insensitive title search | ❌ Not implemented |
+| **Status Filtering** | ✅ `?done=true/false` filter | ❌ Not implemented |
+| **`/stats` Endpoint** | ✅ SQL `COUNT(*)` aggregation | ❌ Not implemented |
+| **`/reset` Endpoint** | ✅ `TRUNCATE RESTART IDENTITY` | ❌ Not implemented |
+| **`RETURNING` on UPDATE** | ✅ Single round-trip UPDATE | ✅ Same approach |
+| **Healthcheck in Compose** | ✅ `pg_isready` healthcheck | ❌ Not in compose |
