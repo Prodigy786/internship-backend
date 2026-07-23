@@ -1,4 +1,4 @@
-import os
+﻿import os
 import psycopg
 from pathlib import Path
 from dotenv import load_dotenv
@@ -305,3 +305,4 @@ def reset_tasks():
         conn.commit()
 
     return {"status": "success", "message": "PostgreSQL database reset to initial 3 seed tasks"}
+
