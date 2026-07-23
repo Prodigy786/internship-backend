@@ -1,264 +1,141 @@
-import sqlite3
-from pathlib import Path
-from fastapi import FastAPI, Request, Response, status
-from fastapi.exceptions import RequestValidationError
+import os
+import psycopg
+from dotenv import load_dotenv
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
-from starlette.exceptions import HTTPException as StarletteHTTPException
 
-DB_PATH = Path(__file__).parent / "ai_tasks.db"
+# Load .env for local development
+load_dotenv()
+
+DATABASE_URL = os.getenv("DATABASE_URL", "postgres://postgres:dev@localhost:5432/tasks")
 
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return psycopg.connect(DATABASE_URL, row_factory=psycopg.rows.dict_row)
 
 def init_db():
     with get_db() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS tasks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL,
-                done INTEGER NOT NULL DEFAULT 0
-            )
-        """)
-        cursor.execute("SELECT COUNT(*) AS count FROM tasks")
-        row = cursor.fetchone()
-        if row["count"] == 0:
-            cursor.executemany(
-                "INSERT INTO tasks (title, done) VALUES (?, ?)",
-                [
-                    ("Learn FastAPI", 0),
-                    ("Set up Git", 1),
-                    ("Complete Stage 2", 0)
-                ]
-            )
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS tasks (
+                    id SERIAL PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    done BOOLEAN NOT NULL DEFAULT FALSE
+                )
+            """)
+            cur.execute("SELECT COUNT(*) AS count FROM tasks")
+            row = cur.fetchone()
+            if row["count"] == 0:
+                cur.executemany(
+                    "INSERT INTO tasks (title, done) VALUES (%s, %s)",
+                    [
+                        ("Learn FastAPI", False),
+                        ("Set up Git", True),
+                        ("Complete Stage 2", False)
+                    ]
+                )
         conn.commit()
 
 app = FastAPI(
-    title="Task API (SQLite Migration)",
-    description="A Python FastAPI To-Do list CRUD API using SQLite storage.",
-    version="1.0"
+    title="Task CRUD API (AI Version — PostgreSQL)",
+    description="AI-generated PostgreSQL CRUD API for the internship assignment Stage 6 comparison.",
+    version="3.0-ai"
 )
 
 @app.on_event("startup")
 def on_startup():
     init_db()
 
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    """
-    Custom exception handler to return 400 Bad Request for validation errors.
-    """
-    return JSONResponse(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        content={"error": "Bad Request: Invalid parameters or body format"}
-    )
-
-@app.exception_handler(StarletteHTTPException)
-async def http_exception_handler(request: Request, exc: StarletteHTTPException):
-    """
-    Custom exception handler for Starlette HTTPExceptions.
-    """
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={"error": exc.detail}
-    )
-
-@app.get("/", status_code=status.HTTP_200_OK)
+@app.get("/")
 def read_root():
-    """
-    Retrieve metadata about the Task API, including name, version, and storage format.
-    """
     return {
-        "name": "Task API",
-        "version": "1.0",
-        "storage": "SQLite (ai_tasks.db)",
+        "name": "Task API (AI)",
+        "version": "3.0-ai",
+        "storage": "PostgreSQL (Docker)",
         "endpoints": ["/tasks", "/health"]
     }
 
-@app.get("/health", status_code=status.HTTP_200_OK)
+@app.get("/health")
 def read_health():
-    """
-    Check the health status of the API application.
-    """
     return {"status": "ok"}
 
-@app.get("/tasks", status_code=status.HTTP_200_OK)
+@app.get("/tasks")
 def read_tasks():
-    """
-    Retrieve all tasks from the SQLite database.
-    """
     with get_db() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT id, title, done FROM tasks ORDER BY id ASC")
-        rows = cursor.fetchall()
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, title, done FROM tasks ORDER BY id ASC")
+            rows = cur.fetchall()
+    return [{"id": r["id"], "title": r["title"], "done": r["done"]} for r in rows]
 
-    return [
-        {
-            "id": row["id"],
-            "title": row["title"],
-            "done": bool(row["done"])
-        }
-        for row in rows
-    ]
-
-@app.get("/tasks/{id}", status_code=status.HTTP_200_OK)
+@app.get("/tasks/{id}")
 def read_task(id: int):
-    """
-    Retrieve a single task by ID from SQLite using a parameterized SQL query.
-    Returns 404 Not Found if the task ID does not exist.
-    """
     with get_db() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT id, title, done FROM tasks WHERE id = ?", (id,))
-        row = cursor.fetchone()
-
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, title, done FROM tasks WHERE id = %s", (id,))
+            row = cur.fetchone()
     if not row:
-        return JSONResponse(
-            status_code=status.HTTP_404_NOT_FOUND,
-            content={"error": f"Task {id} not found"}
-        )
+        return JSONResponse(status_code=404, content={"error": f"Task {id} not found"})
+    return {"id": row["id"], "title": row["title"], "done": row["done"]}
 
-    return {
-        "id": row["id"],
-        "title": row["title"],
-        "done": bool(row["done"])
-    }
-
-@app.post("/tasks", status_code=status.HTTP_201_CREATED)
+@app.post("/tasks", status_code=201)
 async def create_task(request: Request):
-    """
-    Create a new task in SQLite using a parameterized SQL query.
-    Validates non-empty title (returns 400 Bad Request if missing or empty).
-    """
     try:
         body = await request.json()
     except Exception:
-        return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content={"error": "Invalid JSON body"}
-        )
-
-    if not isinstance(body, dict) or "title" not in body:
-        return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content={"error": "Title is required"}
-        )
-
-    title = body.get("title")
-    if not isinstance(title, str) or not title.strip():
-        return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content={"error": "Title cannot be empty"}
-        )
-
-    clean_title = title.strip()
+        return JSONResponse(status_code=400, content={"error": "Invalid JSON body"})
+    if "title" not in body or not isinstance(body["title"], str) or not body["title"].strip():
+        return JSONResponse(status_code=400, content={"error": "Title is required and cannot be empty"})
+    title = body["title"].strip()
     with get_db() as conn:
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO tasks (title, done) VALUES (?, 0)", (clean_title,))
-        task_id = cursor.lastrowid
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO tasks (title, done) VALUES (%s, FALSE) RETURNING id, title, done",
+                (title,)
+            )
+            row = cur.fetchone()
         conn.commit()
+    return {"id": row["id"], "title": row["title"], "done": row["done"]}
 
-        cursor.execute("SELECT id, title, done FROM tasks WHERE id = ?", (task_id,))
-        row = cursor.fetchone()
-
-    return JSONResponse(
-        status_code=status.HTTP_201_CREATED,
-        content={
-            "id": row["id"],
-            "title": row["title"],
-            "done": bool(row["done"])
-        }
-    )
-
-@app.put("/tasks/{id}", status_code=status.HTTP_200_OK)
+@app.put("/tasks/{id}")
 async def update_task(id: int, request: Request):
-    """
-    Update title and/or done status of an existing task in SQLite using parameterized SQL.
-    Returns 404 for unknown ID and 400 for invalid body.
-    """
     with get_db() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT id, title, done FROM tasks WHERE id = ?", (id,))
-        existing = cursor.fetchone()
-
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, title, done FROM tasks WHERE id = %s", (id,))
+            existing = cur.fetchone()
     if not existing:
-        return JSONResponse(
-            status_code=status.HTTP_404_NOT_FOUND,
-            content={"error": f"Task {id} not found"}
-        )
-
+        return JSONResponse(status_code=404, content={"error": f"Task {id} not found"})
     try:
         body = await request.json()
     except Exception:
-        return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content={"error": "Invalid JSON body"}
-        )
-
-    if not isinstance(body, dict) or ("title" not in body and "done" not in body):
-        return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content={"error": "Request body must contain 'title' and/or 'done'"}
-        )
-
+        return JSONResponse(status_code=400, content={"error": "Invalid JSON body"})
+    if "title" not in body and "done" not in body:
+        return JSONResponse(status_code=400, content={"error": "At least one of 'title' or 'done' must be provided"})
     new_title = existing["title"]
     new_done = existing["done"]
-
     if "title" in body:
-        title_val = body["title"]
-        if not isinstance(title_val, str) or not title_val.strip():
-            return JSONResponse(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                content={"error": "Title must be a non-empty string"}
-            )
-        new_title = title_val.strip()
-
+        if not isinstance(body["title"], str) or not body["title"].strip():
+            return JSONResponse(status_code=400, content={"error": "Title must be a non-empty string"})
+        new_title = body["title"].strip()
     if "done" in body:
-        done_val = body["done"]
-        if not isinstance(done_val, bool):
-            return JSONResponse(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                content={"error": "Done must be a boolean"}
-            )
-        new_done = 1 if done_val else 0
-
+        if not isinstance(body["done"], bool):
+            return JSONResponse(status_code=400, content={"error": "Done must be a boolean"})
+        new_done = body["done"]
     with get_db() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE tasks SET title = ?, done = ? WHERE id = ?",
-            (new_title, new_done, id)
-        )
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE tasks SET title = %s, done = %s WHERE id = %s RETURNING id, title, done",
+                (new_title, new_done, id)
+            )
+            row = cur.fetchone()
         conn.commit()
+    return {"id": row["id"], "title": row["title"], "done": row["done"]}
 
-        cursor.execute("SELECT id, title, done FROM tasks WHERE id = ?", (id,))
-        row = cursor.fetchone()
-
-    return {
-        "id": row["id"],
-        "title": row["title"],
-        "done": bool(row["done"])
-    }
-
-@app.delete("/tasks/{id}", status_code=status.HTTP_204_NO_CONTENT)
+@app.delete("/tasks/{id}", status_code=204)
 def delete_task(id: int):
-    """
-    Delete a task from SQLite by its unique ID.
-    Returns status code 204 No Content upon successful deletion, or 404 Not Found if the ID does not exist.
-    """
     with get_db() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT id FROM tasks WHERE id = ?", (id,))
-        existing = cursor.fetchone()
-
-        if not existing:
-            return JSONResponse(
-                status_code=status.HTTP_404_NOT_FOUND,
-                content={"error": f"Task {id} not found"}
-            )
-
-        cursor.execute("DELETE FROM tasks WHERE id = ?", (id,))
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM tasks WHERE id = %s RETURNING id", (id,))
+            deleted = cur.fetchone()
+        if not deleted:
+            return JSONResponse(status_code=404, content={"error": f"Task {id} not found"})
         conn.commit()
-
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    return Response(status_code=204)
