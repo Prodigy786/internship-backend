@@ -1,7 +1,9 @@
 tasks.db
 ai-version/ai_tasks.db
 venv/
+.venv/
 __pycache__/
 *.pyc
 *.pyo
 .env
+node_modules/
